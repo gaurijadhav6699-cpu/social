@@ -430,9 +430,47 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
         }
 
         holder.playerView.setUseController(false);
-        holder.playerView.setPlayer(sharedPlayer);
-
-// --- Double-tap like on playing video ---
+// ... inside playVideo(...) just before attaching the player to the view:
+// Defensive: ensure a TextureView surface exists (reflection used so this compiles on all ExoPlayer versions)
+        try {
+            android.view.View existing = null;
+            try {
+                existing = holder.playerView.getVideoSurfaceView();
+            } catch (Throwable ignored) { }
+            if (!(existing instanceof android.view.TextureView)) {
+                // Try setVideoSurfaceView(View) via reflection (exists on some PlayerView builds)
+                try {
+                    java.lang.reflect.Method m = holder.playerView.getClass().getMethod("setVideoSurfaceView", android.view.View.class);
+                    if (m != null) {
+                        android.view.TextureView tv = new android.view.TextureView(holder.playerView.getContext());
+                        m.invoke(holder.playerView, tv);
+                        Log.d("PlayerSurface", "setVideoSurfaceView(TextureView) via reflection succeeded");
+                    }
+                } catch (NoSuchMethodException nsme) {
+                    // Fallback: try setUseTextureView(boolean) via reflection
+                    try {
+                        java.lang.reflect.Method m2 = holder.playerView.getClass().getMethod("setUseTextureView", boolean.class);
+                        if (m2 != null) {
+                            m2.invoke(holder.playerView, true);
+                            Log.d("PlayerSurface", "setUseTextureView(true) via reflection succeeded");
+                        }
+                    } catch (NoSuchMethodException nsme2) {
+                        // Neither method present at runtime — rely on XML attribute app:surface_type="texture_view"
+                        Log.d("PlayerSurface", "no reflective surface setter; relying on XML surface_type");
+                    } catch (Throwable t2) {
+                        Log.w("PlayerSurface", "invoking setUseTextureView failed", t2);
+                    }
+                } catch (Throwable e) {
+                    Log.w("PlayerSurface", "invoking setVideoSurfaceView failed", e);
+                }
+            } else {
+                Log.d("PlayerSurface", "existing surface is already a TextureView");
+            }
+        } catch (Throwable t) {
+            Log.w("PlayerSurface", "defensive surface setup failed", t);
+        }
+// attach the player after the defensive block
+        holder.playerView.setPlayer(sharedPlayer);// --- Double-tap like on playing video ---
         final int adapterPosition = position; // ensure it's final for the lambda
 
         if (holder.playerView != null) {
@@ -1102,9 +1140,44 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
                 holder.mVideoProgressBar.setVisibility(View.VISIBLE);
 
                 com.google.android.exoplayer2.ExoPlayer exoPlayer = new com.google.android.exoplayer2.ExoPlayer.Builder(context).build();
-                holder.playerView.setPlayer(exoPlayer);
-
-// --- Double-tap like on playing video ---
+// ... inside mItemPlayVideo onClick, after creating exoPlayer and before attaching it to the view:
+// Defensive: ensure a TextureView surface exists (use reflection to avoid compile errors)
+                try {
+                    android.view.View existing = null;
+                    try {
+                        existing = holder.playerView.getVideoSurfaceView();
+                    } catch (Throwable ignored) { }
+                    if (!(existing instanceof android.view.TextureView)) {
+                        try {
+                            java.lang.reflect.Method m = holder.playerView.getClass().getMethod("setVideoSurfaceView", android.view.View.class);
+                            if (m != null) {
+                                android.view.TextureView tv = new android.view.TextureView(holder.playerView.getContext());
+                                m.invoke(holder.playerView, tv);
+                                Log.d("PlayerSurface", "setVideoSurfaceView(TextureView) via reflection succeeded");
+                            }
+                        } catch (NoSuchMethodException nsme) {
+                            try {
+                                java.lang.reflect.Method m2 = holder.playerView.getClass().getMethod("setUseTextureView", boolean.class);
+                                if (m2 != null) {
+                                    m2.invoke(holder.playerView, true);
+                                    Log.d("PlayerSurface", "setUseTextureView(true) via reflection succeeded");
+                                }
+                            } catch (NoSuchMethodException nsme2) {
+                                Log.d("PlayerSurface", "no reflective surface setter; relying on XML surface_type");
+                            } catch (Throwable t2) {
+                                Log.w("PlayerSurface", "invoking setUseTextureView failed", t2);
+                            }
+                        } catch (Throwable e) {
+                            Log.w("PlayerSurface", "invoking setVideoSurfaceView failed", e);
+                        }
+                    } else {
+                        Log.d("PlayerSurface", "existing surface is already a TextureView");
+                    }
+                } catch (Throwable t) {
+                    Log.w("PlayerSurface", "defensive surface setup failed", t);
+                }
+// now safe to attach the per-row player
+                holder.playerView.setPlayer(exoPlayer);// --- Double-tap like on playing video ---
                 final int adapterPosition = position; // ensure it's final for the lambda
 
                 if (holder.playerView != null) {
