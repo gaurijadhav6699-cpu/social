@@ -301,9 +301,7 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
                             sharedPlayer.setMediaSource(mediaSource);
                             sharedPlayer.prepare();
                             try { sharedPlayer.setVolume(0f); } catch (Throwable ignored) {}
-                            // Prepare the media but DO NOT start playback here. Starting playback
-// before the PlayerView surface is attached can produce audio-only (black screen).
-                            try { sharedPlayer.setPlayWhenReady(false); } catch (Throwable ignored) {}
+                            sharedPlayer.setPlayWhenReady(true);
                             try { sharedPlayer.setForegroundMode(true); } catch (Throwable ignored) {}
                         }
                     }
