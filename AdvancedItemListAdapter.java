@@ -218,7 +218,7 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
             });
         }
 
-    
+
 
         // Instant initial auto-play check after layout
         if (recyclerView != null) {
@@ -229,14 +229,14 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
             });
         }
 
-}
+    }
 
     // Finds the most visible video and plays it
     public void autoPlayVideoIfNeeded() {
         long now = SystemClock.elapsedRealtime();
         if (now - lastAutoPlayCheckAt < AUTOPLAY_DEBOUNCE_MS) return;
         lastAutoPlayCheckAt = now;
-    
+
         if (attachedRecyclerView == null) return;
         RecyclerView.LayoutManager lm = attachedRecyclerView.getLayoutManager();
         if (!(lm instanceof GridLayoutManager)) return;
@@ -301,8 +301,10 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
                             sharedPlayer.setMediaSource(mediaSource);
                             sharedPlayer.prepare();
                             try { sharedPlayer.setVolume(0f); } catch (Throwable ignored) {}
-            sharedPlayer.setPlayWhenReady(true);
-            try { sharedPlayer.setForegroundMode(true); } catch (Throwable ignored) {}
+                            // Prepare the media but DO NOT start playback here. Starting playback
+// before the PlayerView surface is attached can produce audio-only (black screen).
+                            try { sharedPlayer.setPlayWhenReady(false); } catch (Throwable ignored) {}
+                            try { sharedPlayer.setForegroundMode(true); } catch (Throwable ignored) {}
                         }
                     }
                 }
@@ -3574,3 +3576,4 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
 
 
 }
+
