@@ -136,6 +136,12 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemListAdapter.ViewHolder> implements Constants, TagClick {
+    // Add these fields inside the adapter class (near other private fields)
+    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable pendingSharedPlayerReleaseRunnable = null;
+    private int pendingSharedPlayerReleasePosition = RecyclerView.NO_POSITION;
+    private static final long SHARED_PLAYER_RELEASE_DELAY_MS = 300L; // adjust (200-400ms) if needed
+
     // --- Autoplay debounce fields (added) ---
     private long lastAutoPlayCheckAt = 0L;
     private static final long AUTOPLAY_DEBOUNCE_MS = 80L;
@@ -186,27 +192,56 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
 
         recyclerView.addOnChildAttachStateChangeListener(new RecyclerView.OnChildAttachStateChangeListener() {
             @Override public void onChildViewAttachedToWindow(@NonNull View view) { }
+
             @Override public void onChildViewDetachedFromWindow(@NonNull View view) {
                 RecyclerView.ViewHolder vh = recyclerView.getChildViewHolder(view);
-                if (vh instanceof ViewHolder) {
-                    ViewHolder holder = (ViewHolder) vh;
-                    if (holder == currentPlayerViewHolder) {
-                        holder.releasePlayer();
-                        currentPlayer = null;
-                        currentPlayerViewHolder = null;
-                        currentPlayingPosition = -1;
-                    }
+                if (!(vh instanceof ViewHolder)) return;
+                ViewHolder holder = (ViewHolder) vh;
 
+                if (holder == currentPlayerViewHolder) {
+                    holder.releasePlayer();
+                    currentPlayer = null;
+                    currentPlayerViewHolder = null;
+                    currentPlayingPosition = -1;
+                }
 
-                    // NEW: also handle the shared / autoplay player when its row detaches
-                    if (holder == sharedHolder) {
-                        try { if (sharedHolder.playerView != null) sharedHolder.playerView.setPlayer(null); } catch (Throwable ignore) {}
-                        try { if (sharedPlayer != null) sharedPlayer.stop(); } catch (Throwable ignore) {}
-                        try { if (sharedPlayer != null) sharedPlayer.release(); } catch (Throwable ignore) {}
-                        sharedPlayer = null;
-                        sharedHolder = null;
-                        sharedPosition = RecyclerView.NO_POSITION;
-                    }
+                // If the detached holder was the sharedHolder, detach the PlayerView immediately
+                // but DO NOT release the sharedPlayer right away. Schedule a delayed release.
+                if (holder == sharedHolder) {
+                    try { if (sharedHolder.playerView != null) sharedHolder.playerView.setPlayer(null); } catch (Throwable ignore) {}
+                    sharedHolder = null;
+
+                    // Cancel any previous pending release
+                    try {
+                        if (pendingSharedPlayerReleaseRunnable != null) {
+                            mainHandler.removeCallbacks(pendingSharedPlayerReleaseRunnable);
+                            pendingSharedPlayerReleaseRunnable = null;
+                            pendingSharedPlayerReleasePosition = RecyclerView.NO_POSITION;
+                        }
+                    } catch (Throwable ignore) {}
+
+                    // Schedule a release of the sharedPlayer after a short grace period.
+                    // If the item reattaches before this runs, we'll cancel it in onViewAttachedToWindow.
+                    final int releasePos = sharedPosition;
+                    pendingSharedPlayerReleasePosition = releasePos;
+                    pendingSharedPlayerReleaseRunnable = () -> {
+                        // If nobody reattached and the sharedPosition still matches, release the player
+                        if (sharedHolder == null && sharedPosition == pendingSharedPlayerReleasePosition) {
+                            try {
+                                if (sharedPlayer != null) {
+                                    try { sharedPlayer.setPlayWhenReady(false); } catch (Throwable ignored) {}
+                                    try { sharedPlayer.stop(); } catch (Throwable ignored) {}
+                                    try { sharedPlayer.release(); } catch (Throwable ignored) {}
+                                }
+                            } catch (Throwable ignored) {}
+                            sharedPlayer = null;
+                            sharedTrackSelector = null;
+                            sharedPosition = RecyclerView.NO_POSITION;
+                        }
+                        pendingSharedPlayerReleaseRunnable = null;
+                        pendingSharedPlayerReleasePosition = RecyclerView.NO_POSITION;
+                    };
+                    mainHandler.postDelayed(pendingSharedPlayerReleaseRunnable, SHARED_PLAYER_RELEASE_DELAY_MS);
                 }
             }
         });
@@ -1061,13 +1096,10 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
             currentPlayingPosition = -1;
         }
 
-        // Also clear shared holder/player if recycled holder was the shared one
         if (sharedHolder == holder) {
-            try { if (sharedPlayer != null) sharedPlayer.stop(); } catch (Throwable ignore) {}
-            try { if (sharedPlayer != null) sharedPlayer.release(); } catch (Throwable ignore) {}
-            sharedPlayer = null;
+            try { if (sharedHolder.playerView != null) sharedHolder.playerView.setPlayer(null); } catch (Throwable ignore) {}
             sharedHolder = null;
-            sharedPosition = RecyclerView.NO_POSITION;
+            // Schedule/detach behavior is handled in the attach-state listener
         }
     }
 
@@ -3573,5 +3605,46 @@ public class AdvancedItemListAdapter extends RecyclerView.Adapter<AdvancedItemLi
     }
 
 
+
+
+    @Override
+    public void onViewAttachedToWindow(@NonNull ViewHolder holder) {
+        super.onViewAttachedToWindow(holder);
+        try {
+            int pos = holder.getAdapterPosition();
+            if (pos != RecyclerView.NO_POSITION && pos == sharedPosition && sharedPlayer != null) {
+                // Cancel pending release, because the item reattached quickly
+                try {
+                    if (pendingSharedPlayerReleaseRunnable != null) {
+                        mainHandler.removeCallbacks(pendingSharedPlayerReleaseRunnable);
+                        pendingSharedPlayerReleaseRunnable = null;
+                        pendingSharedPlayerReleasePosition = RecyclerView.NO_POSITION;
+                    }
+                } catch (Throwable ignore) {}
+
+                try {
+                    holder.playerView.setPlayer(sharedPlayer);
+                    holder.playerView.setVisibility(View.VISIBLE);
+                    if (holder.btnMute != null) holder.btnMute.setVisibility(View.VISIBLE);
+                    sharedHolder = holder;
+                    // Optional: ensure rendering resumes; this doesn't force playback state if you prefer paused
+                    sharedPlayer.setPlayWhenReady(true);
+                } catch (Throwable ignore) {}
+            }
+        } catch (Throwable ignore) {}
+    }
+
+
+    @Override
+    public void onViewDetachedFromWindow(@NonNull ViewHolder holder) {
+        super.onViewDetachedFromWindow(holder);
+        try {
+            if (holder == sharedHolder) {
+                try { if (holder.playerView != null) holder.playerView.setPlayer(null); } catch (Throwable ignore) {}
+                sharedHolder = null;
+                // schedule release already handled by attach-state listener — no extra action here
+            }
+        } catch (Throwable ignore) {}
+    }
 }
 
